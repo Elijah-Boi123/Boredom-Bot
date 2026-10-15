@@ -1,0 +1,843 @@
+(function(){
+  // Remove existing widget DOM elements (preserve localStorage)
+  try{ document.getElementById('bb_widget_resizable_v2')?.remove(); }catch(e){}
+  try{ document.getElementById('__bb_widget_mini_v2')?.remove(); }catch(e){}
+
+  const HOST_ID = 'bb_widget_resizable_v2';
+  const MINI_ID = '__bb_widget_mini_v2';
+  const ICON_KEY = 'bb_icon_settings_ai_v1';
+  const OPENAI_KEY_STORAGE = 'bb_openai_key_v1';
+  const OPENAI_ENABLED = 'bb_openai_enabled_v1';
+  const THEME_KEY = 'bb_theme_v2';
+  const TICK = 1000;
+  const Z = 2147483700;
+
+  const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
+  function clearChildren(el){ while(el && el.firstChild) el.removeChild(el.firstChild); }
+  function text(el,s){ el.textContent = s; }
+
+  // Create fresh host (detached earlier)
+  let host = document.getElementById(HOST_ID);
+  if(!host){
+    host = document.createElement('div'); host.id = HOST_ID;
+    host.style.all = 'initial';
+    host.style.position = 'fixed';
+    host.style.right = '18px';
+    host.style.bottom = '18px';
+    host.style.zIndex = Z;
+    document.documentElement.appendChild(host);
+  }
+  const sr = host.attachShadow({mode:'open'});
+
+  // Styles with theme hook via :host([data-theme="light"]) and :host([data-theme="dark"])
+  const style = document.createElement('style');
+  style.textContent = `
+    :host{font-family:system-ui,Segoe UI,Roboto,Arial}
+    /* DEFAULT: dark->light blue gradient theme */
+    .widget{width:920px;height:640px;background:linear-gradient(180deg,#041426,#0b3b72);color:#e6eef8;border-radius:12px;box-shadow:0 24px 70px rgba(3,18,40,0.7);display:flex;flex-direction:column;overflow:hidden;position:relative}
+    header{display:flex;align-items:center;gap:12px;padding:12px;background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));cursor:grab;user-select:none}
+    .big-icon{width:48px;height:48px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px;background:linear-gradient(135deg,#06b6d4,#7c3aed);color:white;border:none;cursor:pointer}
+    .title{font-weight:700}
+    .header-controls{margin-left:auto;display:flex;gap:8px;align-items:center}
+    .body{flex:1;display:flex;min-height:0;overflow:hidden}
+    .left{width:200px;min-width:80px;max-width:420px;display:flex;flex-direction:column;gap:8px;padding:8px;box-sizing:border-box;background:rgba(255,255,255,0.01)}
+    .menu-btn{display:flex;align-items:center;gap:8px;padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.03);background:transparent;color:inherit;cursor:pointer}
+    .mi{width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;font-size:16px;border-radius:6px}
+    .resizer{width:8px;cursor:col-resize;background:transparent}
+    .right{flex:1;display:flex;align-items:center;justify-content:center;min-width:0;min-height:0;padding:12px;box-sizing:border-box}
+    .panel{background:linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.00));border-radius:10px;display:flex;align-items:center;justify-content:center;overflow:hidden;box-sizing:border-box;position:relative}
+    .panel-inner{box-sizing:border-box;padding:14px;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;width:100%;height:100%;overflow:auto;position:relative}
+    .footer{padding:10px;text-align:center;font-size:13px;color:#9fb8d9;flex:0 0 auto}
+    .small{font-size:13px;padding:6px 8px;border-radius:6px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.03);color:inherit;cursor:pointer}
+    .upgrade-row{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:6px;border-radius:8px;background:rgba(255,255,255,0.012);width:100%}
+    .statline{color:#dbeafe;margin-bottom:8px}
+    input[type=text], input[type=password], input[type=number], textarea, select{width:100%;padding:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.04);background:rgba(255,255,255,0.02);color:inherit;box-sizing:border-box}
+    .plot{width:60px;height:48px;border-radius:6px;background:#081226;color:#e6eef8;display:flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,0.02);font-size:11px;cursor:pointer}
+    .chat-messages{width:100%;height:320px;overflow:auto;background:rgba(255,255,255,0.01);padding:8px;border-radius:8px;display:flex;flex-direction:column;gap:8px}
+    .chat-msg{padding:8px;border-radius:8px;max-width:85%}
+    .chat-msg.user{align-self:flex-end;background:linear-gradient(90deg,#134e4a,#0ea5a3);color:white}
+    .chat-msg.bot{align-self:flex-start;background:rgba(255,255,255,0.02);color:inherit}
+    .chat-controls{display:flex;gap:8px;margin-top:8px;width:100%}
+
+    /* LIGHT THEME overrides: black text, white boxes for plots and other boxed text elements */
+    :host([data-theme="light"]) .widget{
+      background: #f7fafc;
+      color: #000000;
+      box-shadow: 0 16px 40px rgba(10,10,10,0.05);
+    }
+    :host([data-theme="light"]) header{
+      background: linear-gradient(180deg, rgba(0,0,0,0.02), rgba(0,0,0,0.01));
+    }
+    :host([data-theme="light"]) .panel{ background: linear-gradient(180deg, rgba(0,0,0,0.01), rgba(0,0,0,0.00)); }
+    :host([data-theme="light"]) .left { background: rgba(0,0,0,0.01); }
+    :host([data-theme="light"]) .small { background: #ffffff; color: #000000; border: 1px solid rgba(0,0,0,0.08); }
+    :host([data-theme="light"]) input, :host([data-theme="light"]) select { background: #ffffff; color: #000000; border: 1px solid rgba(0,0,0,0.08); }
+
+    /* Make any black box with text (plots specifically) white in light theme */
+    :host([data-theme="light"]) .plot {
+      background: #ffffff;
+      color: #000000;
+      border: 1px solid rgba(0,0,0,0.12);
+    }
+
+    /* DARK THEME: pure black background with light text */
+    :host([data-theme="dark"]) .widget{
+      background: #000000;
+      color: #e6eef8;
+      box-shadow: 0 24px 70px rgba(0,0,0,0.85);
+    }
+    :host([data-theme="dark"]) header{
+      background: linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.00));
+    }
+    :host([data-theme="dark"]) .left { background: rgba(255,255,255,0.01); }
+    :host([data-theme="dark"]) .panel{ background: linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.00)); }
+    :host([data-theme="dark"]) input, :host([data-theme="dark"]) select { background: rgba(255,255,255,0.02); color: #e6eef8; border: 1px solid rgba(255,255,255,0.03); }
+  `;
+  sr.appendChild(style);
+
+  // Build elements
+  const widget = document.createElement('div'); widget.className = 'widget';
+  const header = document.createElement('header');
+  const bigIcon = document.createElement('button'); bigIcon.className='big-icon'; text(bigIcon,'🤖'); bigIcon.title='Collapse to mini';
+  const title = document.createElement('div'); title.className='title'; text(title,'Boredom Bot');
+  const headerControls = document.createElement('div'); headerControls.className='header-controls';
+  const collapseToggle = document.createElement('button'); collapseToggle.className='small'; text(collapseToggle,'Settings: icon');
+  headerControls.appendChild(collapseToggle);
+  header.appendChild(bigIcon); header.appendChild(title); header.appendChild(headerControls);
+
+  const body = document.createElement('div'); body.className='body';
+  const left = document.createElement('div'); left.className='left'; left.style.width='200px';
+  const resizer = document.createElement('div'); resizer.className='resizer'; resizer.setAttribute('role','separator');
+  const right = document.createElement('div'); right.className='right';
+  const panel = document.createElement('div'); panel.className='panel';
+  const panelInner = document.createElement('div'); panelInner.className='panel-inner';
+  panel.appendChild(panelInner); right.appendChild(panel);
+  body.appendChild(left); body.appendChild(resizer); body.appendChild(right);
+
+  const footer = document.createElement('div'); footer.className='footer'; text(footer,'Games run persistently. Settings saved to localStorage.');
+
+  widget.appendChild(header); widget.appendChild(body); widget.appendChild(footer);
+  sr.appendChild(widget);
+
+  // Game definitions
+  const GAME_DEFS = {
+    cookie: { key:'bb_cookie_u', title:'Cookie Clicker', emoji:'🍪', baseGain:1, costMult:1.6, baseCost:28 },
+    workshop: { key:'bb_workshop_u', title:'Workshop', emoji:'🛠️', baseGain:0.2, costMult:1.55, baseCost:8 },
+    farm: { key:'bb_farm_u', title:'Farm', emoji:'🌾', baseGain:0.3, costMult:1.53, baseCost:6 },
+    mine: { key:'bb_mine_u', title:'Mine', emoji:'⛏️', baseGain:0.15, costMult:1.57, baseCost:7 },
+    research: { key:'bb_research_u', title:'Research', emoji:'🔬', baseGain:0.05, costMult:1.5, baseCost:5 }
+  };
+
+  // 25 upgrade names each
+  const UPGRADE_NAMES = {
+    cookie: ['Auto Clicker','Sugar Mixer','Baker Apprentice','Chocolate Press','Cookie Factory','Conveyor Belts','Oven Array','Packaging Line','Marketing','Flavor Lab','Mass Production','Ingredient Synth','Franchise','Cookie Empire','Legendary Oven','Cookie Research','Optimized Recipes','Viral Ad','Global Distribution','Premium Line','Secret Spice','AI Baker','Quantum Oven','Golden Supply','Mythic Batch'],
+    workshop: ['Workbench','Tool Kit','Assembly Line','CNC','Robotics Module','Precision Jigs','Welding Station','Quality Control','Modular Frame','Power Core','Automation Suite','Nano Fabricator','AI Supervisor','Factory Wing','Industrial Cluster','Logistics','Supply Chain','Maintenance Bay','Factory Expansion','Energy Grid','Auto-Assembler','Remote Control','Rapid Prototyping','Adaptive Molds','Mass Fabricator'],
+    farm: ['Hoe','Irrigation','Greenhouse','Tractor','Agri Lab','Compost Heap','Seed Breeder','Solar Pump','Drone Seeder','Crop Rotation','Fertilizer Plant','Weather Dome','Hydroponics','Agri AI','Harvest Combine','Genetic Seeds','Soil Enrichment','Ionic Sprinklers','Field Robots','Storage Silos','Market Stall','Export License','Bio Reactor','Seasonal Seeds','Mega Barn'],
+    mine: ['Stone Tools','Picks','Explosives','Drill','Mega Dredger','Safety Rails','Minecart','Ore Sieve','Smelter','Power Drill','Fragmentation Array','Deep Core','Thermal Lance','Automated Excavator','Orbital Extractor','Rare Sensors','Geo Scanner','Reinforced Shaft','Magnet Extractor','Subterranean AI','Fusion Saw','Cryo Cutter','Plasma Lance','Void Anchor','Prospector Drone'],
+    research: ['Lab Notebook','Field Kit','Microscope','Data Cluster','AI Lab','Research Assist','Simulation Node','Analytics Stack','Data Lake','Quantum Module','Collaborative Network','Research Farm','Open Publication','Patent Suite','Universal Lab','Grant Office','PhD Program','Testbed','Prototype Facility','Peer Review','Meta Analysis','Federated Data','High Throughput','Model Zoo','Autonomous Lab']
+  };
+
+  // State helpers
+  function ensureState(id){
+    const def = GAME_DEFS[id];
+    const raw = localStorage.getItem(def.key);
+    if(raw){
+      try{ return JSON.parse(raw); } catch(e){ localStorage.removeItem(def.key); }
+    }
+    const ups = (UPGRADE_NAMES[id] || Array.from({length:25},(_,i)=>'U'+(i+1))).map((name,i)=>{
+      const base = Math.max(1, Math.round(def.baseCost * Math.pow(def.costMult, i)));
+      return { name, base: Math.ceil(base), cost: Math.ceil(base), gain: +(def.baseGain * Math.pow(1.5, i)).toFixed(4), owned:0, mult: def.costMult };
+    });
+    const base = { resource:0, baseRate:0, totalEarned:0, prestige:0, upgrades:ups, lastTick: Date.now() };
+    if(id === 'cookie'){ base.critChance = 0.08; base.goldenUntil = 0; base.autoClicks = 0; base.lastStarter = 0; }
+    if(id === 'workshop'){ base.machines = 0; base.queue = []; base.completed = 0; base.autoQueue = false; base.lastAutoQueue = 0; base.lastStarter = 0; }
+    if(id === 'farm'){ base.plots = Array.from({length:6}).map(()=>({stage:0, finish:0, watered:false, remaining:0})); base.fertilizer = 0; base.harvestCount = 0; base.lastStarter = 0; }
+    if(id === 'mine'){ base.oreRare = 0; base.charge = 0; base.lastStarter = 0; }
+    if(id === 'research'){ base.techs = {}; base.rp = 0; base.autoResearch = false; base.lastFreeRP = 0; base.lastFreeRes = 0; }
+    localStorage.setItem(def.key, JSON.stringify(base));
+    return base;
+  }
+  function saveState(id, state){ state.lastTick = Date.now(); localStorage.setItem(GAME_DEFS[id].key, JSON.stringify(state)); }
+
+  Object.keys(GAME_DEFS).forEach(k=> ensureState(k));
+
+  // Tick loop
+  const timers = {};
+  function startLoop(id){ if(timers[id]) return; applyOffline(id); timers[id] = setInterval(()=> tickGame(id), TICK); }
+  function stopLoop(id){ if(timers[id]){ clearInterval(timers[id]); delete timers[id]; } }
+
+  function applyOffline(id){
+    const s = ensureState(id);
+    const nowTs = Date.now();
+    const delta = Math.floor((nowTs - (s.lastTick || nowTs))/1000);
+    if(delta > 0){
+      const gain = (s.baseRate||0) * delta;
+      s.resource = (s.resource||0) + gain;
+      s.totalEarned = (s.totalEarned||0) + gain;
+      s.lastTick = nowTs;
+      localStorage.setItem(GAME_DEFS[id].key, JSON.stringify(s));
+    }
+  }
+
+  function tickGame(id){
+    const def = GAME_DEFS[id];
+    const s = ensureState(id);
+
+    if(id === 'cookie'){
+      const clickGain = (s.autoClicks || 0) * (def.baseGain || 1);
+      s.resource = (s.resource||0) + clickGain + (s.baseRate||0);
+      s.totalEarned = (s.totalEarned||0) + clickGain + (s.baseRate||0);
+    } else if(id === 'workshop'){
+      const processingPower = 1 + (s.machines||0);
+      if(s.queue && s.queue.length){
+        let idx = 0;
+        while(idx < s.queue.length){
+          const item = s.queue[idx];
+          item.remaining = Math.max(0, (item.remaining||item.time||1) - processingPower);
+          if(item.remaining <= 0){
+            const completed = s.queue.splice(idx,1)[0];
+            s.completed = (s.completed||0) + 1;
+            const reward = completed.reward || 1 + (Math.floor((s.upgrades||[]).reduce((a,u)=>a+(u.owned||0),0)/2));
+            s.resource = (s.resource||0) + reward;
+            s.totalEarned = (s.totalEarned||0) + reward;
+          } else idx++;
+        }
+      }
+      if(s.autoQueue && Date.now() - (s.lastAutoQueue||0) > 5000){
+        s.lastAutoQueue = Date.now();
+        if(s.queue.length < Math.max(3, (s.machines||0)*2 + 2)){
+          const craft = { name: 'AutoGadget', time: Math.max(2, 6 - Math.floor((s.machines||0)/2)), remaining: Math.max(2, 6 - Math.floor((s.machines||0)/2)), reward: 3 + Math.floor((s.upgrades||[]).reduce((a,u)=>a+(u.owned||0),0)/3) };
+          s.queue.push(craft);
+        }
+      }
+      s.resource = (s.resource||0) + (s.machines||0) * 0.2 + (s.baseRate||0);
+      s.totalEarned = (s.totalEarned||0) + (s.machines||0) * 0.2 + (s.baseRate||0);
+    } else if(id === 'farm'){
+      s.plots.forEach((p)=>{ if(p.stage === 1){ p.remaining = Math.max(0, (p.remaining||1) - (p.watered ? 2 : 1)); if(p.remaining <= 0){ p.stage = 2; p.watered = false; } } });
+      const ownedUpgrades = (s.upgrades||[]).reduce((a,u)=>a + (u.owned||0), 0);
+      const upgradeProd = ownedUpgrades * 0.15;
+      s.resource = (s.resource||0) + (s.baseRate||0) + upgradeProd;
+      s.totalEarned = (s.totalEarned||0) + (s.baseRate||0) + upgradeProd;
+    } else if(id === 'mine'){
+      s.resource = (s.resource||0) + (s.baseRate||0);
+      s.totalEarned = (s.totalEarned||0) + (s.baseRate||0);
+    } else if(id === 'research'){
+      const owned = (s.upgrades||[]).reduce((a,u)=>a+(u.owned||0),0);
+      s.rp = (s.rp||0) + (s.baseRate||0) + owned * 0.05;
+      if(s.autoResearch && (s.resource||0) >= 5){
+        const convert = Math.min( Math.floor((s.resource||0) / 10), 1 );
+        if(convert > 0){ s.resource -= convert * 5; s.rp += 1 + Math.floor(owned/5); }
+      }
+    }
+
+    saveState(id, s);
+    if(activeGame === id) refreshGameUI(id);
+  }
+
+  Object.keys(GAME_DEFS).forEach(k=> startLoop(k));
+
+  // upgrades area builder (scrollable)
+  function makeUpgradesArea(gameId){
+    const upgradesWrap = document.createElement('div');
+    upgradesWrap.style.width='100%';
+    upgradesWrap.style.display='flex';
+    upgradesWrap.style.flexDirection='column';
+    upgradesWrap.style.gap='8px';
+    upgradesWrap.style.overflowY='auto';
+    upgradesWrap.style.flex = '1';
+    upgradesWrap.style.maxHeight = 'calc(100% - 180px)';
+
+    function renderUpgrades(){
+      clearChildren(upgradesWrap);
+      const cur = ensureState(gameId);
+      cur.upgrades.forEach((u, idx)=>{
+        const row = document.createElement('div'); row.className='upgrade-row';
+        const left = document.createElement('div'); left.textContent = (idx+1)+'. '+u.name+' (x'+(u.owned||0)+')';
+        const right = document.createElement('div'); right.style.display='flex'; right.style.gap='8px'; right.style.alignItems='center';
+        const cost = document.createElement('div'); cost.textContent = ((u.cost||u.base)||0).toLocaleString();
+        const buy = document.createElement('button'); buy.className='small'; text(buy, 'Buy');
+        buy.addEventListener('click', ()=>{
+          const cur2 = ensureState(gameId);
+          const price = cur2.upgrades[idx].cost || cur2.upgrades[idx].base;
+          if((cur2.resource||0) >= price){
+            cur2.resource -= price;
+            cur2.upgrades[idx].owned = (cur2.upgrades[idx].owned||0) + 1;
+            cur2.baseRate = (cur2.baseRate||0) + (cur2.upgrades[idx].gain || 0);
+            // per-game special indices
+            if(gameId === 'cookie'){ if(idx === 0) cur2.autoClicks = (cur2.autoClicks||0) + 1; if(idx === 1) cur2.critChance = Math.min(0.6, (cur2.critChance||0) + 0.05); }
+            if(gameId === 'workshop'){ if(idx === 10) cur2.autoQueue = true; if(idx === 20) cur2.machines = (cur2.machines||0) + 1; }
+            if(gameId === 'farm'){ if(idx === 4) cur2.fertilizer = (cur2.fertilizer||0) + 1; if(idx === 6 && cur2.plots.length < 12) cur2.plots.push({stage:0, finish:0, watered:false, remaining:0}); }
+            if(gameId === 'mine'){ if(idx === 1) cur2.oreRare = (cur2.oreRare||0) + 1; }
+            if(gameId === 'research'){ if(idx === 10) cur2.autoResearch = true; }
+            cur2.upgrades[idx].cost = Math.ceil((cur2.upgrades[idx].base||1) * Math.pow(cur2.upgrades[idx].mult||1.5, cur2.upgrades[idx].owned||1));
+            saveState(gameId, cur2);
+            renderUpgrades();
+            refreshGameUI(gameId);
+          } else toast('Not enough');
+        });
+        right.appendChild(cost); right.appendChild(buy);
+        row.appendChild(left); row.appendChild(right); upgradesWrap.appendChild(row);
+      });
+    }
+
+    renderUpgrades();
+    return { upgradesWrap, renderUpgrades };
+  }
+
+  // cooldown helper
+  function attachCooldownUI(button, getState, stampKey, cooldownMs, labelBase){
+    function update(){
+      const s = getState();
+      const last = s[stampKey] || 0;
+      const now = Date.now();
+      const rem = Math.max(0, Math.ceil((last + cooldownMs - now)/1000));
+      if(rem > 0){
+        button.disabled = true;
+        text(button, labelBase + ' (' + rem + 's)');
+      } else {
+        button.disabled = false;
+        text(button, labelBase);
+      }
+    }
+    update();
+    const timer = setInterval(update, 500);
+    return ()=> clearInterval(timer);
+  }
+
+  // THEME: apply & persist
+  function applyThemeFromStorage(){
+    try{
+      const t = localStorage.getItem(THEME_KEY) || 'default';
+      if(t === 'default' || !t) {
+        host.removeAttribute('data-theme');
+      } else {
+        host.setAttribute('data-theme', t);
+      }
+    }catch(e){ console.warn(e); }
+  }
+  // call early so theme is applied before UI shows
+  applyThemeFromStorage();
+
+  // openGameUI and per-game UIs
+  let activeGame = null;
+  function openGameUI(id){
+    activeGame = id;
+    const def = GAME_DEFS[id];
+    const s = ensureState(id);
+    clearChildren(panelInner);
+
+    const headerDiv = document.createElement('div'); headerDiv.className='statline'; text(headerDiv, def.title);
+    const stat = document.createElement('div'); stat.className='statline'; stat.setAttribute('data-stat','');
+
+    function addStarterButton(container, gameId){
+      const doc = panelInner.ownerDocument;
+      const starter = doc.createElement('button'); starter.className='small'; text(starter,'Get Starter Resource (10) — 10s cooldown');
+      starter.addEventListener('click', ()=>{
+        const st = ensureState(gameId);
+        const now = Date.now();
+        if((st.lastStarter||0) + 10000 > now){ toast('Starter on cooldown'); return; }
+        st.resource = (st.resource||0) + 10;
+        st.lastStarter = now;
+        saveState(gameId, st);
+        refreshGameUI(gameId);
+        toast('Gave 10 resource');
+      });
+      attachCooldownUI(starter, ()=> ensureState(gameId), 'lastStarter', 10000, 'Get Starter Resource (10) — 10s cooldown');
+      container.appendChild(starter);
+    }
+
+    if(id === 'cookie'){
+      const big = document.createElement('div'); big.style.fontSize='64px'; big.style.width='120px'; big.style.height='120px'; big.style.display='flex'; big.style.alignItems='center'; big.style.justifyContent='center'; big.style.borderRadius='50%'; big.style.background='radial-gradient(circle at 30% 30%, #fffbe0, #f6c56d)'; big.style.cursor='pointer'; text(big, def.emoji);
+      const goldenBtn = document.createElement('button'); goldenBtn.className='small'; goldenBtn.style.display='none'; text(goldenBtn,'Golden Cookie!');
+      const controls = document.createElement('div'); controls.style.display='flex'; controls.style.gap='8px';
+      const critInfo = document.createElement('div'); critInfo.style.padding='6px'; controls.appendChild(critInfo);
+      const { upgradesWrap } = makeUpgradesArea('cookie');
+
+      big.addEventListener('click', ()=>{
+        const s2 = ensureState('cookie');
+        const crit = Math.random() < (s2.critChance || 0);
+        const gain = (def.baseGain || 1) * (crit ? 3 : 1);
+        s2.resource = (s2.resource||0) + gain;
+        s2.totalEarned = (s2.totalEarned||0) + gain;
+        if(Math.random() < 0.03){ s2.goldenUntil = Date.now() + 10_000; goldenBtn.style.display = ''; }
+        saveState('cookie', s2); refreshGameUI('cookie');
+      });
+
+      goldenBtn.addEventListener('click', ()=>{
+        const s2 = ensureState('cookie');
+        if(Date.now() > (s2.goldenUntil || 0)){ goldenBtn.style.display = 'none'; return; }
+        const bonus = 50 + Math.floor(Math.random()*150);
+        s2.resource = (s2.resource||0) + bonus;
+        s2.totalEarned = (s2.totalEarned||0) + bonus;
+        s2.goldenUntil = 0; goldenBtn.style.display = 'none';
+        saveState('cookie', s2); toast('Golden! +' + bonus); refreshGameUI('cookie');
+      });
+
+      panelInner.appendChild(headerDiv); panelInner.appendChild(big); panelInner.appendChild(goldenBtn); panelInner.appendChild(stat); panelInner.appendChild(controls);
+      panelInner.appendChild(upgradesWrap);
+      critInfo.textContent = 'Crit: ' + Math.round((s.critChance||0)*100) + '%';
+      if(s.goldenUntil && Date.now() < s.goldenUntil) goldenBtn.style.display = '';
+      addStarterButton(panelInner, 'cookie');
+    }
+
+    else if(id === 'workshop'){
+      const titleArea = document.createElement('div'); titleArea.className='statline'; text(titleArea, def.title);
+      const statArea = document.createElement('div'); statArea.className='statline'; statArea.setAttribute('data-stat','');
+
+      const queueControls = document.createElement('div'); queueControls.style.display='flex'; queueControls.style.gap='8px'; queueControls.style.alignItems='center'; queueControls.style.width='100%';
+      const craftSelect = document.createElement('select');
+      ['Gadget','Widget','Module','Prototype'].forEach(t=>{ const o = document.createElement('option'); o.value=t; o.textContent = t; craftSelect.appendChild(o); });
+      const qtyInput = document.createElement('input'); qtyInput.type='number'; qtyInput.min='1'; qtyInput.value='1'; qtyInput.style.width='80px';
+      const enqueueBtn = document.createElement('button'); enqueueBtn.className='small'; text(enqueueBtn,'Enqueue (free)');
+      const buyMachineQty = document.createElement('input'); buyMachineQty.type='number'; buyMachineQty.min='1'; buyMachineQty.value='1'; buyMachineQty.style.width='80px';
+      const buyMachineBtn = document.createElement('button'); buyMachineBtn.className='small'; text(buyMachineBtn,'Buy Machine(s)');
+      const machineInfo = document.createElement('div'); machineInfo.style.display='flex'; machineInfo.style.flexDirection='column'; machineInfo.style.alignItems='flex-end';
+      const machineCount = document.createElement('div'); machineCount.textContent = 'Machines: ' + (s.machines||0);
+      const machineCostEl = document.createElement('div'); machineCostEl.style.fontSize = '12px'; machineCostEl.style.opacity = '0.9';
+      machineInfo.appendChild(machineCount); machineInfo.appendChild(machineCostEl);
+      queueControls.appendChild(craftSelect); queueControls.appendChild(qtyInput); queueControls.appendChild(enqueueBtn); queueControls.appendChild(buyMachineQty); queueControls.appendChild(buyMachineBtn); queueControls.appendChild(machineInfo);
+
+      const queueWrap = document.createElement('div'); queueWrap.style.width='100%'; queueWrap.style.display='flex'; queueWrap.style.flexDirection='column'; queueWrap.style.gap='8px'; queueWrap.style.maxHeight='170px'; queueWrap.style.overflowY='auto';
+
+      function renderQueue(){
+        clearChildren(queueWrap);
+        const cur = ensureState('workshop');
+        if(!cur.queue || cur.queue.length === 0){
+          const empty = document.createElement('div'); text(empty, 'Queue is empty'); queueWrap.appendChild(empty);
+        } else {
+          cur.queue.forEach((item, idx)=>{
+            const row = document.createElement('div'); row.style.display='flex'; row.style.justifyContent='space-between'; row.style.alignItems='center';
+            const left = document.createElement('div'); left.textContent = item.name + ' • ' + Math.max(0, Math.ceil(item.remaining || item.time)) + 's left';
+            const cancel = document.createElement('button'); cancel.className='small'; text(cancel,'Cancel');
+            cancel.addEventListener('click', ()=>{ const c2 = ensureState('workshop'); c2.queue.splice(idx,1); saveState('workshop', c2); renderQueue(); refreshGameUI('workshop'); });
+            row.appendChild(left); row.appendChild(cancel); queueWrap.appendChild(row);
+          });
+        }
+      }
+
+      function updateMachineDisplay(){
+        const s2 = ensureState('workshop');
+        machineCount.textContent = 'Machines: ' + (s2.machines||0);
+        const cost = Math.ceil(60 * Math.pow(1.6, (s2.machines||0)));
+        machineCostEl.textContent = 'Next machine cost: ' + cost.toLocaleString();
+      }
+      updateMachineDisplay();
+
+      enqueueBtn.addEventListener('click', ()=>{
+        const s2 = ensureState('workshop');
+        const qty = Math.max(1, Math.floor(Number(qtyInput.value) || 1));
+        const type = craftSelect.value || 'Gadget';
+        for(let i=0;i<qty;i++){
+          const craft = { name: type, time: Math.max(2, 6 - Math.floor((s2.machines||0)/2)), remaining: Math.max(2, 6 - Math.floor((s2.machines||0)/2)), reward: 5 + Math.floor((s2.upgrades || []).reduce((a,u)=>a+(u.owned||0),0)/2) };
+          s2.queue.push(craft);
+        }
+        saveState('workshop', s2);
+        renderQueue(); refreshGameUI('workshop');
+        toast('Enqueued ' + qty + ' x ' + type);
+      });
+
+      buyMachineBtn.addEventListener('click', ()=>{
+        const s2 = ensureState('workshop');
+        const qty = Math.max(1, Math.floor(Number(buyMachineQty.value) || 1));
+        let costTotal = 0;
+        for(let i=0;i<qty;i++){
+          costTotal += Math.ceil(60 * Math.pow(1.6, (s2.machines||0) + i));
+        }
+        if((s2.resource||0) >= costTotal){
+          s2.resource -= costTotal;
+          s2.machines = (s2.machines||0) + qty;
+          saveState('workshop', s2);
+          updateMachineDisplay(); renderQueue(); refreshGameUI('workshop');
+          toast('Bought ' + qty + ' machine(s)');
+        } else toast('Not enough for ' + qty + ' machines (cost ' + costTotal.toLocaleString() + ')');
+      });
+
+      const { upgradesWrap, renderUpgrades } = makeUpgradesArea('workshop');
+
+      panelInner.appendChild(titleArea); panelInner.appendChild(statArea); panelInner.appendChild(queueControls); panelInner.appendChild(queueWrap); panelInner.appendChild(upgradesWrap);
+      renderQueue(); renderUpgrades(); updateMachineDisplay();
+      addStarterButton(panelInner, 'workshop');
+    }
+
+    else if(id === 'farm'){
+      const titleArea = document.createElement('div'); titleArea.className='statline'; text(titleArea, def.title);
+      const plotsWrap = document.createElement('div'); plotsWrap.style.display='flex'; plotsWrap.style.gap='6px'; plotsWrap.setAttribute('data-plots','');
+      const plantBtn = document.createElement('button'); plantBtn.className='small'; text(plantBtn,'Plant');
+      const waterBtn = document.createElement('button'); waterBtn.className='small'; text(waterBtn,'Water All');
+      const harvestBtn = document.createElement('button'); harvestBtn.className='small'; text(harvestBtn,'Harvest All');
+      const harvestInfo = document.createElement('div'); harvestInfo.style.marginTop='8px';
+
+      const { upgradesWrap, renderUpgrades } = makeUpgradesArea('farm');
+
+      function renderPlots(){
+        clearChildren(plotsWrap);
+        const cur = ensureState('farm');
+        cur.plots.forEach((p, idx)=>{
+          const el = document.createElement('div'); el.className='plot';
+          if(p.stage === 0) el.textContent = 'Empty';
+          else if(p.stage === 1) el.textContent = 'Growing ' + Math.max(0, Math.ceil((p.finish - Date.now())/1000)) + 's';
+          else el.textContent = 'Ready';
+          el.addEventListener('click', ()=>{
+            const s2 = ensureState('farm');
+            const plot = s2.plots[idx];
+            if(plot.stage === 2){
+              const gain = 5 + Math.floor((s2.upgrades || []).reduce((a,u)=>a+(u.owned||0),0)/5) + (s2.fertilizer||0);
+              s2.resource = (s2.resource||0) + gain; s2.totalEarned = (s2.totalEarned||0) + gain;
+              s2.harvestCount = (s2.harvestCount||0) + gain;
+              s2.plots[idx] = { stage:0, finish:0, watered:false, remaining:0 };
+              saveState('farm', s2); renderPlots(); refreshGameUI('farm'); toast('Harvested +' + gain);
+            } else if(plot.stage === 0){ toast('Use Plant to plant'); }
+            else toast('Not ready yet');
+          });
+          plotsWrap.appendChild(el);
+        });
+      }
+
+      plantBtn.addEventListener('click', ()=>{
+        const s2 = ensureState('farm');
+        const idx = s2.plots.findIndex(p=>p.stage===0);
+        if(idx === -1) return toast('No empty plots');
+        const owned = s2.upgrades.reduce((a,u)=>a+(u.owned||0),0);
+        const duration = Math.max(3, 10 - Math.floor(owned/3) - (s2.fertilizer||0));
+        s2.plots[idx] = { stage:1, finish: Date.now() + duration*1000, remaining: duration, watered:false };
+        saveState('farm', s2); renderPlots(); refreshGameUI('farm'); toast('Planted ('+duration+'s)');
+      });
+
+      waterBtn.addEventListener('click', ()=>{ const s2 = ensureState('farm'); s2.plots.forEach(p=>{ if(p.stage===1) p.watered = true; }); saveState('farm', s2); renderPlots(); toast('Watered'); });
+      harvestBtn.addEventListener('click', ()=>{
+        const s2 = ensureState('farm'); let total=0;
+        s2.plots.forEach((p,i)=>{ if(p.stage===2){ const gain = 5 + Math.floor((s2.upgrades||[]).reduce((a,u)=>a+(u.owned||0),0)/5) + (s2.fertilizer||0); total+=gain; s2.plots[i]={stage:0,finish:0,watered:false,remaining:0}; }});
+        s2.resource = (s2.resource||0) + total; s2.totalEarned = (s2.totalEarned||0) + total; s2.harvestCount = (s2.harvestCount||0) + total; saveState('farm', s2); renderPlots(); refreshGameUI('farm'); toast('Harvested '+total);
+      });
+
+      panelInner.appendChild(titleArea); panelInner.appendChild(plotsWrap); panelInner.appendChild(plantBtn); panelInner.appendChild(waterBtn); panelInner.appendChild(harvestBtn); panelInner.appendChild(harvestInfo);
+      panelInner.appendChild(upgradesWrap);
+      renderPlots(); renderUpgrades();
+      harvestInfo.textContent = 'Total harvested: ' + (s.harvestCount||0);
+      addStarterButton(panelInner, 'farm');
+    }
+
+    else if(id === 'mine'){
+      const titleArea = document.createElement('div'); titleArea.className='statline'; text(titleArea, def.title);
+      const chargeBtn = document.createElement('button'); chargeBtn.className='small'; text(chargeBtn,'Hold to Charge');
+      const chargeBar = document.createElement('div'); chargeBar.style.width='220px'; chargeBar.style.height='12px'; chargeBar.style.background='#062036'; chargeBar.style.borderRadius='8px'; chargeBar.style.overflow='hidden';
+      const chargeFill = document.createElement('div'); chargeFill.style.height='100%'; chargeFill.style.width='0%'; chargeFill.style.background='#7c3aed';
+      chargeBar.appendChild(chargeFill);
+      const statArea = document.createElement('div'); statArea.className='statline'; statArea.setAttribute('data-stat','');
+      const rareArea = document.createElement('div'); rareArea.style.marginTop='8px';
+
+      let charging = false; let charge = 0, maxCharge = 100;
+      chargeBtn.addEventListener('pointerdown', (e)=>{ e.preventDefault(); charging = true; charge = 0; chargeFill.style.width = '0%'; });
+      window.addEventListener('pointerup', (e)=>{
+        if(!charging) return; charging = false;
+        const s2 = ensureState('mine');
+        const power = Math.round(charge);
+        const baseYield = 1 + Math.floor(power/20) + Math.floor((s2.upgrades || []).reduce((a,u)=>a+(u.owned||0),0)/5);
+        let total = baseYield;
+        if(Math.random() < Math.min(0.5, power/200 + (s2.oreRare||0)*0.02)){
+          const rare = Math.ceil(power/20) + 2;
+          s2.oreRare = (s2.oreRare||0) + 1;
+          total += rare;
+          rareArea.textContent = 'Found rare ore +' + rare;
+        } else rareArea.textContent = '';
+        s2.resource = (s2.resource||0) + total; s2.totalEarned = (s2.totalEarned||0) + total; saveState('mine', s2); refreshGameUI('mine'); toast('Mined ' + total);
+        charge = 0; chargeFill.style.width = '0%';
+      });
+      const chargeTimer = setInterval(()=>{ if(charging){ charge = Math.min(maxCharge, charge + 3); chargeFill.style.width = Math.round((charge/maxCharge)*100) + '%'; } }, 80);
+
+      const { upgradesWrap, renderUpgrades } = makeUpgradesArea('mine');
+      panelInner.appendChild(titleArea); panelInner.appendChild(chargeBtn); panelInner.appendChild(chargeBar); panelInner.appendChild(statArea); panelInner.appendChild(rareArea); panelInner.appendChild(upgradesWrap);
+      renderUpgrades();
+      addStarterButton(panelInner, 'mine');
+    }
+
+    else if(id === 'research'){
+      const titleArea = document.createElement('div'); titleArea.className='statline'; text(titleArea, def.title);
+      const rpArea = document.createElement('div'); rpArea.className='statline'; rpArea.setAttribute('data-rp','');
+      const runBtn = document.createElement('button'); runBtn.className='small'; text(runBtn,'Run Experiment (cost 20 resource)');
+      const collectBtn = document.createElement('button'); collectBtn.className='small'; text(collectBtn,'Collect RP (cost 5 resource)');
+      const freeRPBtn = document.createElement('button'); freeRPBtn.className='small'; text(freeRPBtn,'Free RP (5) — 15s cooldown');
+      const freeResBtn = document.createElement('button'); freeResBtn.className='small'; text(freeResBtn,'Free Resource (10) — 15s cooldown');
+      const runInfo = document.createElement('div'); runInfo.style.marginTop='8px';
+
+      const { upgradesWrap, renderUpgrades } = makeUpgradesArea('research');
+
+      runBtn.addEventListener('click', ()=>{
+        const s2 = ensureState('research');
+        if((s2.resource||0) < 20) return toast('Not enough resource');
+        s2.resource -= 20;
+        const owned = (s2.upgrades||[]).reduce((a,u)=>a+(u.owned||0),0);
+        const reward = 5 + Math.floor(owned/3) + Math.floor(Math.random()*6);
+        s2.rp = (s2.rp||0) + reward;
+        saveState('research', s2);
+        toast('Experiment success: +' + reward + ' RP');
+        refreshGameUI('research');
+      });
+
+      collectBtn.addEventListener('click', ()=>{
+        const s2 = ensureState('research');
+        if((s2.resource||0) < 5) return toast('Need at least 5 resource to collect RP');
+        s2.resource -= 5;
+        const owned = (s2.upgrades||[]).reduce((a,u)=>a+(u.owned||0),0);
+        const reward = 1 + Math.floor(owned/10) + Math.floor(Math.random()*2);
+        s2.rp = (s2.rp||0) + reward;
+        saveState('research', s2);
+        toast('Collected +' + reward + ' RP');
+        refreshGameUI('research');
+      });
+
+      freeRPBtn.addEventListener('click', ()=>{
+        const s2 = ensureState('research');
+        const now = Date.now();
+        if((s2.lastFreeRP||0) + 15000 > now) return toast('Free RP on cooldown');
+        s2.lastFreeRP = now;
+        s2.rp = (s2.rp||0) + 5;
+        saveState('research', s2);
+        toast('Granted 5 RP (free)');
+        refreshGameUI('research');
+      });
+
+      freeResBtn.addEventListener('click', ()=>{
+        const s2 = ensureState('research');
+        const now = Date.now();
+        if((s2.lastFreeRes||0) + 15000 > now) return toast('Free resource on cooldown');
+        s2.lastFreeRes = now;
+        s2.resource = (s2.resource||0) + 10;
+        saveState('research', s2);
+        toast('Granted 10 resource (free)');
+        refreshGameUI('research');
+      });
+
+      panelInner.appendChild(titleArea); panelInner.appendChild(rpArea);
+      panelInner.appendChild(runBtn); panelInner.appendChild(collectBtn); panelInner.appendChild(freeRPBtn); panelInner.appendChild(freeResBtn); panelInner.appendChild(runInfo); panelInner.appendChild(upgradesWrap);
+      renderUpgrades();
+      runInfo.textContent = 'Run experiments or collect RP manually. Free buttons have cooldowns.';
+      attachCooldownUI(freeRPBtn, ()=> ensureState('research'), 'lastFreeRP', 15000, 'Free RP (5) — 15s cooldown');
+      attachCooldownUI(freeResBtn, ()=> ensureState('research'), 'lastFreeRes', 15000, 'Free Resource (10) — 15s cooldown');
+    }
+
+    panelInner.appendChild(stat);
+    refreshGameUI(id);
+    setTimeout(adjustPanelSquare,40);
+  }
+
+  function refreshGameUI(id){
+    if(!panelInner) return;
+    const def = GAME_DEFS[id];
+    const s = ensureState(id);
+    const statEl = panelInner.querySelector('[data-stat]');
+    if(statEl){
+      statEl.textContent = def.emoji + ' ' + Math.floor(s.resource).toLocaleString() + ' • Rate: ' + Math.round(((s.baseRate||0))*10)/10;
+    }
+    if(id === 'farm'){
+      const hInfo = Array.from(panelInner.querySelectorAll('div')).find(n=> n.textContent && n.textContent.startsWith('Total harvested'));
+      if(hInfo) hInfo.textContent = 'Total harvested: ' + (s.harvestCount||0);
+      // ensure plots styled correctly immediately (in case theme changed)
+      Array.from(panelInner.querySelectorAll('.plot')).forEach(p=>{
+        if(host.getAttribute('data-theme') === 'light'){
+          p.style.background = '#ffffff'; p.style.color = '#000000'; p.style.border = '1px solid rgba(0,0,0,0.12)';
+        } else {
+          p.style.background = ''; p.style.color = ''; p.style.border = '';
+        }
+      });
+    }
+    if(id === 'workshop'){
+      const machineCountEl = Array.from(panelInner.querySelectorAll('div')).find(n=> n.textContent && n.textContent.startsWith('Machines:'));
+      const machineCostEl = Array.from(panelInner.querySelectorAll('div')).find(n=> n.textContent && n.textContent.includes('Next machine cost'));
+      if(machineCountEl) machineCountEl.textContent = 'Machines: ' + (s.machines||0);
+      if(machineCostEl){
+        const cost = Math.ceil(60 * Math.pow(1.6, (s.machines||0)));
+        machineCostEl.textContent = 'Next machine cost: ' + cost.toLocaleString();
+      }
+    }
+    if(id === 'research'){
+      const rp = panelInner.querySelector('[data-rp]');
+      if(rp) rp.textContent = 'Research Points: ' + Math.floor(s.rp||0);
+    }
+  }
+
+  // left menu
+  let settingsCollapsed = true;
+  function renderLeft(){
+    clearChildren(left);
+    function add(label, emoji, onClick, isSettings=false){
+      const b = document.createElement('button'); b.className='menu-btn';
+      const i = document.createElement('span'); i.className='mi'; text(i, emoji); b.appendChild(i);
+      if(!settingsCollapsed || !isSettings){ const t = document.createElement('span'); text(t, label); b.appendChild(t); }
+      b.addEventListener('click', onClick);
+      left.appendChild(b); return b;
+    }
+    add('Cookie Clicker','🍪', ()=> openGameUI('cookie'));
+    add('Workshop','🛠️', ()=> openGameUI('workshop'));
+    add('Farm','🌾', ()=> openGameUI('farm'));
+    add('Mine','⛏️', ()=> openGameUI('mine'));
+    add('Research','🔬', ()=> openGameUI('research'));
+    add('Settings','⚙️', ()=> openSettings(), true);
+    add('AI Chatbot','🤖', ()=> openChat(), false);
+  }
+  renderLeft();
+
+  // resizer
+  (function(){
+    let dragging=false, startX=0, startW=200;
+    resizer.addEventListener('pointerdown', (e)=>{ dragging=true; startX=e.clientX; startW = parseInt(getComputedStyle(left).width,10) || 200; resizer.classList.add('dragging'); resizer.setPointerCapture(e.pointerId); });
+    window.addEventListener('pointermove', (e)=>{ if(!dragging) return; const dx = e.clientX - startX; const newW = clamp(startW + dx, 80, 420); left.style.width = newW + 'px'; adjustPanelSquare(); }, { passive:true });
+    window.addEventListener('pointerup', (e)=>{ if(!dragging) return; dragging=false; try{ resizer.releasePointerCapture && resizer.releasePointerCapture(e.pointerId); }catch(e){} resizer.classList.remove('dragging'); });
+  })();
+
+  function adjustPanelSquare(){
+    const widgetEl = sr.querySelector('.widget'); if(!widgetEl) return;
+    const headerH = Math.ceil(parseFloat(getComputedStyle(sr.querySelector('header')).height) || 56);
+    const footerH = Math.ceil(parseFloat(getComputedStyle(sr.querySelector('.footer')).height) || 36);
+    const rect = widgetEl.getBoundingClientRect();
+    const availH = Math.max(200, rect.height - headerH - footerH - 28);
+    const leftW = parseInt(getComputedStyle(left).width,10) || 200;
+    const availW = Math.max(260, rect.width - leftW - 36);
+    const side = Math.round(Math.min(availW, availH));
+    const panelEl = sr.querySelector('.panel');
+    if(panelEl){ panelEl.style.width = side + 'px'; panelEl.style.height = side + 'px'; }
+  }
+  setTimeout(adjustPanelSquare,60);
+  window.addEventListener('resize', adjustPanelSquare);
+
+  // Settings + Chat (with Theme selector)
+  function openSettings(){
+    clearChildren(panelInner);
+    const doc = panelInner.ownerDocument;
+    const h = doc.createElement('div'); h.className='statline'; text(h,'Settings');
+
+    // Emoji & Image
+    const emojiLabel = doc.createElement('label'); text(emojiLabel,'Emoji');
+    const emojiInput = doc.createElement('input'); emojiInput.type='text';
+    const imageLabel = doc.createElement('label'); text(imageLabel,'Image URL');
+    const imageInput = doc.createElement('input'); imageInput.type='text';
+
+    // Theme selector
+    const themeLabel = doc.createElement('label'); text(themeLabel,'Theme');
+    const themeSelect = doc.createElement('select');
+    ['default','dark','light'].forEach(t=>{
+      const o = doc.createElement('option'); o.value = t; o.textContent = t.charAt(0).toUpperCase() + t.slice(1);
+      themeSelect.appendChild(o);
+    });
+    // preload theme selection from storage
+    try{ const cur = localStorage.getItem(THEME_KEY) || 'default'; themeSelect.value = cur; }catch(e){}
+    themeSelect.addEventListener('change', ()=> {
+      localStorage.setItem(THEME_KEY, themeSelect.value || 'default');
+      applyThemeFromStorage();
+      // ensure plots refresh immediately
+      if(activeGame) refreshGameUI(activeGame);
+    });
+
+    // OpenAI key
+    const apiLabel = doc.createElement('label'); text(apiLabel,'OpenAI API Key (optional)');
+    const apiInput = doc.createElement('input'); apiInput.type = 'password';
+
+    // Save
+    const save = doc.createElement('button'); save.className='small'; text(save,'Save');
+    save.addEventListener('click', ()=>{
+      try{
+        localStorage.setItem(ICON_KEY, JSON.stringify({emoji:emojiInput.value.trim()||'🤖', url:imageInput.value.trim()||''}));
+        if(apiInput.value && apiInput.value.trim()) localStorage.setItem(OPENAI_KEY_STORAGE, apiInput.value.trim());
+        else localStorage.removeItem(OPENAI_KEY_STORAGE);
+        // theme persist & apply
+        const chosen = (themeSelect.value || 'default');
+        localStorage.setItem(THEME_KEY, chosen);
+        applyThemeFromStorage();
+        applyIcon();
+        toast('Saved');
+      }catch(e){ toast('Save failed'); }
+    });
+
+    // load existing icon & api key
+    try{
+      const icon = JSON.parse(localStorage.getItem(ICON_KEY)||'{}');
+      emojiInput.value = icon.emoji || '';
+      imageInput.value = icon.url || '';
+      apiInput.value = localStorage.getItem(OPENAI_KEY_STORAGE) || '';
+    }catch(e){}
+
+    panelInner.appendChild(h);
+    panelInner.appendChild(emojiLabel); panelInner.appendChild(emojiInput);
+    panelInner.appendChild(imageLabel); panelInner.appendChild(imageInput);
+    panelInner.appendChild(themeLabel); panelInner.appendChild(themeSelect);
+    panelInner.appendChild(apiLabel); panelInner.appendChild(apiInput);
+    panelInner.appendChild(save);
+    setTimeout(adjustPanelSquare,30);
+  }
+
+  function openChat(){
+    clearChildren(panelInner);
+    const doc = panelInner.ownerDocument;
+    const header = doc.createElement('div'); header.className='statline'; text(header,'AI Chatbot');
+    const msgs = doc.createElement('div'); msgs.className = 'chat-messages'; msgs.setAttribute('role','log');
+    const controls = doc.createElement('div'); controls.className = 'chat-controls';
+    const input = doc.createElement('input'); input.type = 'text'; input.placeholder = 'Ask something...'; input.style.flex = '1';
+    const send = doc.createElement('button'); send.className='small'; text(send,'Send');
+    const clearBtn = doc.createElement('button'); clearBtn.className='small'; text(clearBtn,'Clear');
+    controls.appendChild(input); controls.appendChild(send); controls.appendChild(clearBtn);
+    panelInner.appendChild(header); panelInner.appendChild(msgs); panelInner.appendChild(controls);
+    setTimeout(adjustPanelSquare,30);
+    function appendMessage(textContent, who){ const m = doc.createElement('div'); m.className = 'chat-msg ' + (who==='user' ? 'user' : 'bot'); text(m, textContent); msgs.appendChild(m); msgs.scrollTop = msgs.scrollHeight; }
+    function localBotResponse(prompt){ const p=(prompt||'').toLowerCase(); if(p.includes('hello')) return 'Hi — local bot fallback'; if(p.includes('time')) return 'Local time: ' + new Date().toLocaleString(); return 'You said: ' + prompt; }
+    async function sendToAI(prompt){
+      appendMessage(prompt, 'user'); input.value = '';
+      const waiting = doc.createElement('div'); waiting.className='chat-msg bot'; text(waiting, '…'); msgs.appendChild(waiting); msgs.scrollTop = msgs.scrollHeight;
+      const useOpenAI = localStorage.getItem(OPENAI_ENABLED) === '1'; const key = localStorage.getItem(OPENAI_KEY_STORAGE);
+      if(useOpenAI && key){
+        try{
+          const payload = { model: 'gpt-3.5-turbo', messages:[{role:'user',content:prompt}], temperature:0.7, max_tokens:600 };
+          const res = await fetch('https://api.openai.com/v1/chat/completions', { method:'POST', headers:{ 'Content-Type':'application/json','Authorization':'Bearer '+key }, body:JSON.stringify(payload) });
+          if(!res.ok){ const errText = await res.text().catch(()=>res.statusText); waiting.remove(); toast('OpenAI request failed, using fallback'); appendMessage(localBotResponse(prompt),'bot'); console.warn('OpenAI error',res.status,errText); return; }
+          const data = await res.json(); waiting.remove();
+          const reply = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) ? data.choices[0].message.content.trim() : 'No response';
+          appendMessage(reply, 'bot'); return;
+        }catch(err){ waiting.remove(); toast('Network error, using fallback'); appendMessage(localBotResponse(prompt),'bot'); console.warn(err); return; }
+      } else { waiting.remove(); setTimeout(()=> appendMessage(localBotResponse(prompt),'bot'), 300 + Math.random()*400); }
+    }
+    send.addEventListener('click', ()=>{ const v = input.value.trim(); if(!v) return; sendToAI(v); });
+    clearBtn.addEventListener('click', ()=>{ clearChildren(msgs); });
+    input.addEventListener('keydown', (e)=>{ if(e.key === 'Enter'){ e.preventDefault(); send.click(); } });
+    appendMessage("Hello! Ask me things. Put an OpenAI key in Settings to use GPT.", 'bot');
+  }
+
+  // apply icon
+  function applyIcon(){
+    try{ const icon = JSON.parse(localStorage.getItem(ICON_KEY)||'{}'); if(icon.url){ bigIcon.style.backgroundImage = `url("${icon.url}")`; bigIcon.style.backgroundSize='cover'; bigIcon.textContent=''; } else { bigIcon.style.backgroundImage=''; bigIcon.textContent = icon.emoji || '🤖'; } }catch(e){}
+  }
+  applyIcon();
+
+  // mini collapse
+  function createMini(){
+    try{ document.getElementById(MINI_ID)?.remove(); }catch(e){}
+    const mini = document.createElement('button'); mini.id = MINI_ID; mini.type='button';
+    Object.assign(mini.style, { position:'fixed', right:'18px', bottom:'18px', width:'56px', height:'56px', borderRadius:'12px', zIndex:Z+50, display:'flex', alignItems:'center', justifyContent:'center', padding:'0', border:'none', cursor:'pointer', background:'linear-gradient(135deg,#06b6d4,#7c3aed)', color:'#fff', boxShadow:'0 8px 24px rgba(0,0,0,0.4)' });
+    try{ const icon = JSON.parse(localStorage.getItem(ICON_KEY)||'{}'); if(icon.url){ mini.style.backgroundImage = `url("${icon.url}")`; mini.style.backgroundSize='cover'; mini.textContent=''; } else mini.textContent = icon.emoji || '🤖'; }catch(e){ mini.textContent = '🤖'; }
+    mini.addEventListener('click', ()=> { try{ document.getElementById(MINI_ID)?.remove(); host.style.display = ''; }catch(e){} setTimeout(adjustPanelSquare,60); });
+    document.body.appendChild(mini);
+  }
+  bigIcon.addEventListener('click', ()=> { try{ host.style.display = 'none'; createMini(); }catch(e){ console.warn(e); } });
+
+  // existing mini restore
+  const existingMini = document.getElementById(MINI_ID);
+  if(existingMini){ existingMini.addEventListener('click', ()=> { try{ existingMini.remove(); host.style.display = ''; }catch(e){} setTimeout(adjustPanelSquare,60); }); }
+
+  // toast helper
+  function toast(msg, ms=1200){
+    if(!panelInner){ alert(msg); return; }
+    const t = document.createElement('div'); text(t, msg);
+    Object.assign(t.style, { position:'absolute', left:'50%', transform:'translateX(-50%)', background:'rgba(0,0,0,0.7)', padding:'8px 12px', borderRadius:'8px', zIndex:Z+60, color:'#fff' });
+    const container = panelInner.parentNode || panelInner;
+    container.appendChild(t);
+    setTimeout(()=>{ try{ t.remove(); }catch(e){} }, ms);
+  }
+
+  function ensurePlaceholder(){ if(panelInner && !panelInner.textContent.trim()){ clearChildren(panelInner); const p = panelInner.ownerDocument.createElement('div'); p.className='statline'; text(p,'Choose a menu item on the left.'); panelInner.appendChild(p); } }
+  ensurePlaceholder();
+
+  setInterval(()=> { if(activeGame) refreshGameUI(activeGame); }, 1200);
+
+  // expose small API
+  window.__bb_widget_v2 = { openGameUI, startLoop, stopLoop, ensureState, applyIcon, openChat, applyThemeFromStorage };
+
+  console.log('Replacement widget ready — default is dark/light blue; light mode uses black text and white plot boxes.');
+})();
