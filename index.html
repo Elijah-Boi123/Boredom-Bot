@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Boredom Bot — Install</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;background:#071026;color:#e6eef8;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
+    .card{width:920px;max-width:94%;background:linear-gradient(180deg,#041426,#0b3b72);padding:28px;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,0.6)}
+    h1{margin:0 0 8px}
+    p{margin:6px 0 16px;color:#cfe8ff}
+    .row{display:flex;gap:12px;flex-wrap:wrap}
+    button, a.install{padding:10px 14px;border-radius:8px;border:none;background:#06b6d4;color:#041426;font-weight:600;cursor:pointer;text-decoration:none}
+    input{width:100%;padding:8px;border-radius:6px;border:none;margin-top:8px}
+    .note{font-size:13px;color:#bcd9ff;margin-top:10px}
+    .box{background:rgba(255,255,255,0.03);padding:12px;border-radius:8px;margin-top:12px}
+    label{font-size:13px;color:#bcd9ff}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Boredom Bot — Install</h1>
+    <p>Install the Boredom Bot widget on any page. Host widget.js in this repo (or elsewhere) and the buttons below will inject it into the current page.</p>
+
+    <div class="row">
+      <button id="run-now">Run widget in this page</button>
+      <a class="install" id="bookmarklet-link" href="#">Copy bookmarklet</a>
+      <a class="install" id="userscript-link" href="#" download="boredom-bot.user.js">Download userscript</a>
+    </div>
+
+    <div class="box">
+      <label>Direct widget URL (for hosting):</label>
+      <input id="widget-url" value="https://elijah-boi123.github.io/Boredom-Bot/widget.js" />
+      <div class="note">After you enable Pages the bookmarklet and userscript will work.</div>
+    </div>
+
+    <div class="box">
+      <label>One-line bookmarklet (paste to bookmarks):</label>
+      <input id="bm" readonly />
+      <div class="note">Click "Copy bookmarklet" to copy it to clipboard.</div>
+    </div>
+
+    <div style="margin-top:14px;color:#a7d4ff;font-size:13px">
+      Quick instructions:
+      <ol>
+        <li>Create the file widget.js in this repo with your widget code.</li>
+        <li>Enable Pages (branch: main / folder: root).</li>
+        <li>Visit the published site and use the buttons to run or install the widget.</li>
+      </ol>
+    </div>
+  </div>
+
+<script>
+(function(){
+  function buildBookmarklet(widgetUrl){
+    return "javascript:(function(){var s=document.createElement('script');s.src='"+widgetUrl+"?t='+Date.now();s.onload=function(){console.log('Boredom Bot loaded')};document.body.appendChild(s);})();";
+  }
+  const widgetUrlInput = document.getElementById('widget-url');
+  const bmInput = document.getElementById('bm');
+  const runNow = document.getElementById('run-now');
+  const bookmarkletLink = document.getElementById('bookmarklet-link');
+  const userscriptLink = document.getElementById('userscript-link');
+
+  function refresh(){
+    const u = widgetUrlInput.value.trim();
+    const bm = buildBookmarklet(u);
+    bmInput.value = bm;
+    userscriptLink.href = generateUserscript(u);
+  }
+
+  function generateUserscript(widgetUrl){
+    const meta = `// ==UserScript==
+// @name         Boredom Bot
+// @namespace    https://example.com/
+// @version      1.0
+// @description  Injects the Boredom Bot widget into pages
+// @match        *://*/*
+// @grant        none
+// @run-at       document-end
+// ==/UserScript==
+
+(function(){
+  var s = document.createElement('script');
+  s.src = '${widgetUrl}';
+  document.body.appendChild(s);
+})();
+`;
+    const blob = new Blob([meta], {type:'application/javascript'});
+    return URL.createObjectURL(blob);
+  }
+
+  bookmarkletLink.addEventListener('click', function(e){
+    e.preventDefault();
+    const bm = buildBookmarklet(widgetUrlInput.value.trim());
+    navigator.clipboard && navigator.clipboard.writeText(bm).then(()=> {
+      alert('Bookmarklet copied to clipboard. Paste into a bookmark URL.');
+    }, ()=>{ prompt('Copy this bookmarklet manually:', bm); });
+  });
+
+  runNow.addEventListener('click', function(){
+    const u = widgetUrlInput.value.trim();
+    if(!u) return alert('Enter the widget URL first');
+    const s = document.createElement('script');
+    s.src = u + '?t=' + Date.now();
+    s.onload = function(){ alert('Boredom Bot loaded'); };
+    s.onerror = function(){ alert('Failed to load widget.js - check the URL'); };
+    document.body.appendChild(s);
+  });
+
+  refresh();
+  widgetUrlInput.addEventListener('input', refresh);
+})();
+</script>
+</body>
+</html>
